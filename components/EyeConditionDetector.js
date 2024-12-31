@@ -325,7 +325,7 @@ const EyeConditionDetector = () => {
             Platform.OS === 'web' && { maxWidth: 800, alignSelf: 'center' }
           ]}
         >
-          {Platform.OS === 'web' ? (
+          
             <TouchableOpacity 
               style={styles.themeToggle} 
               onPress={toggleTheme}
@@ -334,18 +334,7 @@ const EyeConditionDetector = () => {
                 {isDarkMode ? '☀️ Light' : '🌙 Dark'}
               </Text>
             </TouchableOpacity>
-          ) : null}
-  
-          {Platform.OS !== 'web' && (
-            <TouchableOpacity 
-              style={styles.themeToggle} 
-              onPress={toggleTheme}
-            >
-              <Text style={styles.themeToggleText}>
-                {isDarkMode ? '☀️ Light' : '🌙 Dark'}
-              </Text>
-            </TouchableOpacity>
-          )}
+          
   
           {renderServerStatus()}
           

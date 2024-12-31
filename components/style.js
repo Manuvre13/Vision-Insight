@@ -151,19 +151,23 @@ export const createStyles = (colors) => StyleSheet.create({
   themeToggle: {
     ...Platform.select({
       web: {
-        position: 'absolute',
-        top: 20,
-        right: 20,
+        position: 'relative', // Change from 'absolute' to 'relative'
+        alignSelf: 'flex-end', // Align to the right
+        marginBottom: 15, // Add some margin to separate from other elements
+        padding: 10,
+        borderRadius: 8,
+        backgroundColor: colors.primary,
+        zIndex: 1000,
       },
       default: {
         alignSelf: 'flex-end',
         marginBottom: 10,
         marginHorizontal: 20,
+        padding: 10,
+        borderRadius: 8,
+        backgroundColor: colors.primary,
+        zIndex: 1000,
       }
     }),
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: colors.primary,
-    zIndex: 1000,
   },
 });
