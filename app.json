@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "visionInsight",
+    "slug": "visionInsight",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/eye.jpg",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/eye.jpg",
+      "resizeMode": "contain",
+      "backgroundColor": "black"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/eye.jpg",
+        "backgroundColor": "black"
+      }
+    },
+    "web": {
+      "favicon": "./assets/eye.jpg"
+    }
+  }
+}
