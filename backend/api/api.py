@@ -13,6 +13,11 @@ from datetime import datetime
 import os
 import traceback
 
+# Configure TensorFlow for memory optimization
+tf.config.set_visible_devices([], 'GPU')  # Disable GPU
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+
 # Setup enhanced logging
 logging.basicConfig(
     level=logging.INFO,
@@ -40,12 +45,13 @@ app.add_middleware(
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "final_model.keras")
 TARGET_SIZE = (224, 224)
 DISEASE_COLS = ['N', 'D', 'G', 'C', 'A']
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 5 * 1024 * 1024  # Reduced to 5MB
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
-# Model loading with proper error handling
+# Model loading with proper error handling and memory optimization
 try:
-    model = tf.keras.models.load_model(MODEL_PATH)
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)  # Added compile=False
+    model.make_predict_function()  # Eager execution
     logger.info(f"Model loaded successfully from {MODEL_PATH}")
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
@@ -65,7 +71,6 @@ class HealthResponse(BaseModel):
     model_path: str
     version: str = "1.0.0"
 
-# Middleware for request logging
 @app.middleware("http")
 async def log_requests(request, call_next):
     start_time = datetime.now()
@@ -85,9 +90,7 @@ async def log_requests(request, call_next):
         raise
 
 async def validate_image(file: UploadFile) -> bytes:
-    """Validate the uploaded image file with enhanced error checking"""
     try:
-        # Check file extension
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
@@ -95,7 +98,6 @@ async def validate_image(file: UploadFile) -> bytes:
                 detail=f"Invalid file extension. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
             )
         
-        # Read and validate file content
         contents = await file.read()
         if len(contents) == 0:
             raise HTTPException(
@@ -109,11 +111,10 @@ async def validate_image(file: UploadFile) -> bytes:
                 detail=f"File size too large. Maximum size: {MAX_FILE_SIZE/1024/1024:.1f}MB"
             )
         
-        # Validate image format
         try:
             img = Image.open(io.BytesIO(contents))
             img.verify()
-        except Exception as e:
+        except Exception:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid image format or corrupted file"
@@ -132,23 +133,13 @@ async def validate_image(file: UploadFile) -> bytes:
         )
 
 def preprocess_image(image_data: bytes) -> np.ndarray:
-    """Preprocess the image data with enhanced error handling"""
     try:
-        # Convert bytes to PIL Image
         img = Image.open(io.BytesIO(image_data))
-        
-        # Convert to RGB if necessary
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        # Resize image
         img = img.resize(TARGET_SIZE, Image.LANCZOS)
-        
-        # Convert to array and normalize
-        img_array = np.array(img, dtype=np.float32)
-        img_array = img_array / 255.0
-        
-        # Add batch dimension
+        img_array = np.array(img, dtype=np.float32) / 255.0
         return np.expand_dims(img_array, axis=0)
         
     except Exception as e:
@@ -161,7 +152,6 @@ def preprocess_image(image_data: bytes) -> np.ndarray:
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint with enhanced status information"""
     status = "healthy" if model is not None else "model not loaded"
     return {
         "status": status,
@@ -173,16 +163,8 @@ async def health_check():
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(file: UploadFile = File(...)):
-    """
-    Predict eye conditions from fundus image
-    
-    - Accepts JPEG or PNG images
-    - Maximum file size: 10MB
-    - Returns predictions for all conditions and confidence score
-    """
     start_time = datetime.now()
     
-    # Check if model is loaded
     if model is None:
         raise HTTPException(
             status_code=503,
@@ -190,21 +172,17 @@ async def predict(file: UploadFile = File(...)):
         )
 
     try:
-        # Log incoming request
         logger.info(f"Processing file: {file.filename}, content_type: {file.content_type}")
         
-        # Validate and read image
         image_data = await validate_image(file)
         logger.info(f"Image validated successfully, size: {len(image_data)} bytes")
         
-        # Preprocess image
         preprocessed_image = preprocess_image(image_data)
         logger.info("Image preprocessed successfully")
         
-        # Make prediction
-        predictions = model.predict(preprocessed_image, verbose=0)
+        with tf.device('/CPU:0'):  # Force CPU usage
+            predictions = model.predict(preprocessed_image, verbose=0)
         
-        # Process results
         prediction_dict = {
             disease: float(pred)
             for disease, pred in zip(DISEASE_COLS, predictions[0])
@@ -232,11 +210,10 @@ async def predict(file: UploadFile = File(...)):
         )
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "api:app",
+        app,
         host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
-        access_log=True
+        port=port,
+        log_level="info"
     )
