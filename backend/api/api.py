@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import tensorflow as tf
@@ -12,11 +12,15 @@ import logging
 from datetime import datetime
 import os
 import traceback
+import gc
+from tensorflow.keras.mixed_precision import set_global_policy
 
-# Configure TensorFlow for memory optimization
+# Memory optimization configurations
 tf.config.set_visible_devices([], 'GPU')  # Disable GPU
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.experimental.enable_tensor_float_32_execution(False)
+set_global_policy('float16')
 
 # Setup enhanced logging
 logging.basicConfig(
@@ -32,7 +36,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware with proper configuration
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Configure with specific origins in production
@@ -45,20 +49,27 @@ app.add_middleware(
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "final_model.keras")
 TARGET_SIZE = (224, 224)
 DISEASE_COLS = ['N', 'D', 'G', 'C', 'A']
-MAX_FILE_SIZE = 5 * 1024 * 1024  # Reduced to 5MB
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
-# Model loading with proper error handling and memory optimization
+# Environment variables for configuration
+MAX_WORKERS = int(os.getenv('MAX_WORKERS', '1'))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '1'))
+WORKER_CONNECTIONS = int(os.getenv('WORKER_CONNECTIONS', '100'))
+
+# Model loading with memory optimization
 try:
-    model = tf.keras.models.load_model(MODEL_PATH, compile=False)  # Added compile=False
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
     model.make_predict_function()  # Eager execution
+    tf.keras.backend.clear_session()
+    gc.collect()
     logger.info(f"Model loaded successfully from {MODEL_PATH}")
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
     logger.error(traceback.format_exc())
     model = None
 
-# Pydantic models for request/response validation
+# Pydantic models
 class PredictionResponse(BaseModel):
     predictions: Dict[str, float]
     confidence: float
@@ -70,6 +81,13 @@ class HealthResponse(BaseModel):
     timestamp: str
     model_path: str
     version: str = "1.0.0"
+    memory_usage: float
+
+def get_memory_usage():
+    """Get current memory usage in MB"""
+    import psutil
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024
 
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -114,6 +132,7 @@ async def validate_image(file: UploadFile) -> bytes:
         try:
             img = Image.open(io.BytesIO(contents))
             img.verify()
+            img.close()
         except Exception:
             raise HTTPException(
                 status_code=400,
@@ -134,14 +153,25 @@ async def validate_image(file: UploadFile) -> bytes:
 
 def preprocess_image(image_data: bytes) -> np.ndarray:
     try:
-        img = Image.open(io.BytesIO(image_data))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        img = img.resize(TARGET_SIZE, Image.LANCZOS)
-        img_array = np.array(img, dtype=np.float32) / 255.0
-        return np.expand_dims(img_array, axis=0)
-        
+        # Use a context manager for the BytesIO object
+        with io.BytesIO(image_data) as bio:
+            img = Image.open(bio)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Use BILINEAR instead of LANCZOS for faster resizing
+            img = img.resize(TARGET_SIZE, Image.BILINEAR)
+            
+            # Use float16 for reduced memory usage
+            img_array = np.array(img, dtype=np.float16) / 255.0
+            img_array = np.expand_dims(img_array, axis=0)
+            
+            # Clear PIL image from memory
+            img.close()
+            del img
+            
+            return img_array
+            
     except Exception as e:
         logger.error(f"Image preprocessing error: {str(e)}")
         logger.error(traceback.format_exc())
@@ -150,19 +180,27 @@ def preprocess_image(image_data: bytes) -> np.ndarray:
             detail="Error preprocessing image"
         )
 
+def cleanup_memory():
+    """Function to clean up memory after prediction"""
+    gc.collect()
+    tf.keras.backend.clear_session()
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     status = "healthy" if model is not None else "model not loaded"
+    memory_usage = get_memory_usage()
+    
     return {
         "status": status,
         "model_loaded": model is not None,
         "timestamp": datetime.now().isoformat(),
         "model_path": MODEL_PATH,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "memory_usage": memory_usage
     }
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(file: UploadFile = File(...)):
+async def predict(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     start_time = datetime.now()
     
     if model is None:
@@ -177,11 +215,17 @@ async def predict(file: UploadFile = File(...)):
         image_data = await validate_image(file)
         logger.info(f"Image validated successfully, size: {len(image_data)} bytes")
         
-        preprocessed_image = preprocess_image(image_data)
-        logger.info("Image preprocessed successfully")
-        
         with tf.device('/CPU:0'):  # Force CPU usage
-            predictions = model.predict(preprocessed_image, verbose=0)
+            preprocessed_image = preprocess_image(image_data)
+            predictions = model.predict(
+                preprocessed_image,
+                verbose=0,
+                batch_size=BATCH_SIZE
+            )
+        
+        # Clean up preprocessing data
+        del preprocessed_image
+        del image_data
         
         prediction_dict = {
             disease: float(pred)
@@ -190,6 +234,9 @@ async def predict(file: UploadFile = File(...)):
         
         confidence = float(max(predictions[0]))
         processing_time = (datetime.now() - start_time).total_seconds()
+        
+        # Schedule cleanup
+        background_tasks.add_task(cleanup_memory)
         
         logger.info(f"Prediction completed in {processing_time:.2f}s")
         
@@ -215,5 +262,7 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
+        workers=MAX_WORKERS,
+        limit_concurrency=WORKER_CONNECTIONS,
         log_level="info"
     )
