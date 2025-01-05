@@ -13,7 +13,7 @@ from datetime import datetime
 import os
 import traceback
 import gc
-from tensorflow.keras.mixed_precision import set_global_policy
+from tensorflow.keras.mixed_precision import set_global_policy # type: ignore
 
 # Memory optimization configurations
 tf.config.set_visible_devices([], 'GPU')  # Disable GPU
