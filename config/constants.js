@@ -2,7 +2,7 @@
 export const API_CONFIG = {
     // Change this to your computer's local IP address when testing
     // Example: 'http://192.168.1.100:8000'
-    BASE_URL: 'http://192.168.100.10:8000',  
+    BASE_URL: 'https://vision-insight-api.onrender.com',  
     ENDPOINTS: {
       PREDICT: '/predict',
       HEALTH: '/health'
