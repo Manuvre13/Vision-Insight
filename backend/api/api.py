@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import io
 import uvicorn
-from typing import Dict
+from typing import Dict, List
 from pydantic import BaseModel
 import logging
 from datetime import datetime
@@ -25,9 +25,53 @@ set_global_policy('float16')
 # Setup enhanced logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Console handler
+    ]
 )
-logger = logging.getLogger(__name__)
+
+# Create a root logger to capture all logs
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Add new Pydantic model for logs
+class LogEntry(BaseModel):
+    timestamp: str
+    level: str
+    message: str
+
+class LogsResponse(BaseModel):
+    logs: List[LogEntry]
+    count: int
+
+# Add a custom handler to store logs in memory
+class MemoryLogHandler(logging.Handler):
+    def __init__(self, capacity=5000):
+        super().__init__()
+        self.capacity = capacity
+        self.logs = []
+
+    def emit(self, record):
+        log_entry = LogEntry(
+            timestamp=datetime.fromtimestamp(record.created).isoformat(),
+            level=record.levelname,
+            message=record.getMessage()
+        )
+        self.logs.append(log_entry)
+        if len(self.logs) > self.capacity:
+            self.logs.pop(0)
+
+# Initialize memory log handler
+memory_handler = MemoryLogHandler()
+root_logger.addHandler(memory_handler)
+
+# Capture uvicorn logs
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+uvicorn_access_logger.addHandler(memory_handler)
+
+uvicorn_error_logger = logging.getLogger("uvicorn.error")
+uvicorn_error_logger.addHandler(memory_handler)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -39,7 +83,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure with specific origins in production
+    allow_origins=[
+        "https://your-vercel-app.vercel.app",  # Production
+        "http://localhost:3000",  # Development
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,13 +110,14 @@ try:
     model.make_predict_function()  # Eager execution
     tf.keras.backend.clear_session()
     gc.collect()
+    logger = logging.getLogger(__name__)
     logger.info(f"Model loaded successfully from {MODEL_PATH}")
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
     logger.error(traceback.format_exc())
     model = None
 
-# Pydantic models
+# Pydantic models for predictions
 class PredictionResponse(BaseModel):
     predictions: Dict[str, float]
     confidence: float
@@ -88,6 +136,17 @@ def get_memory_usage():
     import psutil
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("=== Application Starting Up ===")
+    logger.info(f"Workers: {MAX_WORKERS}")
+    logger.info(f"Batch Size: {BATCH_SIZE}")
+    logger.info(f"Worker Connections: {WORKER_CONNECTIONS}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("=== Application Shutting Down ===")
 
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -185,6 +244,29 @@ def cleanup_memory():
     gc.collect()
     tf.keras.backend.clear_session()
 
+@app.get("/", response_model=LogsResponse)
+async def root(logs: str = None):
+    """
+    Root endpoint that handles log requests via query parameters
+    """
+    if logs in ["build", "container"]:
+        try:
+            return {
+                "logs": memory_handler.logs,
+                "count": len(memory_handler.logs)
+            }
+        except Exception as e:
+            logger.error(f"Error retrieving logs: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Error retrieving application logs"
+            )
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="Not found"
+        )
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     status = "healthy" if model is not None else "model not loaded"
@@ -258,11 +340,18 @@ async def predict(background_tasks: BackgroundTasks, file: UploadFile = File(...
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
+    
+    # Configure uvicorn logging
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["formatters"]["access"]["fmt"] = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    log_config["formatters"]["default"]["fmt"] = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=port,
         workers=MAX_WORKERS,
         limit_concurrency=WORKER_CONNECTIONS,
-        log_level="info"
+        log_level="info",
+        log_config=log_config
     )

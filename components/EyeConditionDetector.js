@@ -111,9 +111,8 @@ ErrorBoundary.contextType = ThemeContext;
 const api = axios.create({
   baseURL: API_CONFIG.BASE_URL,
   timeout: API_CONFIG.TIMEOUT,
-  headers: {
-    'Accept': 'application/json',
-  }
+  headers: API_CONFIG.HEADERS,
+  withCredentials: false // Important for CORS
 });
 
 // Main Component
@@ -230,6 +229,7 @@ const EyeConditionDetector = () => {
         formData, 
         {
           headers: {
+            ...API_CONFIG.HEADERS,
             'Content-Type': 'multipart/form-data',
           },
           transformRequest: (data, headers) => {
@@ -255,22 +255,31 @@ const EyeConditionDetector = () => {
     }
   }, [image]);
 
-  // Server Health Check
+  // Enhanced server health check with retry logic
   useEffect(() => {
+    let retryCount = 0;
+    const maxRetries = 3;
+    
     const checkServerHealth = async () => {
       try {
         const response = await api.get(API_CONFIG.ENDPOINTS.HEALTH);
+        console.log('Health check response:', response.data);
         setServerStatus(response.data.model_loaded ? 'ready' : 'error');
+        retryCount = 0; // Reset retry count on success
       } catch (err) {
         console.error('Health check error:', err);
-        setServerStatus('error');
+        if (retryCount < maxRetries) {
+          retryCount++;
+          setTimeout(checkServerHealth, 5000); // Retry after 5 seconds
+        } else {
+          setServerStatus('error');
+        }
       }
     };
 
-    const healthCheckInterval = setInterval(checkServerHealth, 30000);
     checkServerHealth();
-
-    return () => clearInterval(healthCheckInterval);
+    const interval = setInterval(checkServerHealth, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Render Predictions
