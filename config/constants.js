@@ -1,4 +1,6 @@
 // constants.js
+import axios from 'axios';  // Add this import at the top of the file
+
 export const API_CONFIG = {
   BASE_URL: 'https://manuvre-vision-insight-api.hf.space',
   ENDPOINTS: {
