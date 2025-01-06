@@ -10,7 +10,6 @@ export const API_CONFIG = {
   TIMEOUT: 60000,
   HEADERS: {
     'Accept': 'application/json',
-    'Origin': window.location.origin,
   }
 };
 

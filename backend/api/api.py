@@ -83,10 +83,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://vision-insight-self.vercel.app/",  # Production
-        "http://localhost:3000",  # Development
-    ],
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
