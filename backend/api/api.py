@@ -84,7 +84,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://your-vercel-app.vercel.app",  # Production
+        "https://vision-insight-self.vercel.app/",  # Production
         "http://localhost:3000",  # Development
     ],
     allow_credentials=True,

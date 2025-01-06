@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import axios from 'axios';
+import { createApiClient } from '../config/constants';
 
 // Import Styles and Config
 import { createStyles, lightColors, darkColors } from './style';
@@ -107,13 +108,8 @@ class ErrorBoundary extends React.Component {
 }
 ErrorBoundary.contextType = ThemeContext;
 
-// API Client
-const api = axios.create({
-  baseURL: API_CONFIG.BASE_URL,
-  timeout: API_CONFIG.TIMEOUT,
-  headers: API_CONFIG.HEADERS,
-  withCredentials: false // Important for CORS
-});
+// Create API client instance
+const api = createApiClient();
 
 // Main Component
 const EyeConditionDetector = () => {
